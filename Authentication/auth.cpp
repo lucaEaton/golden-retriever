@@ -42,7 +42,7 @@
  *   this to equal `size * nmemb`. Returning a smaller value signals
  *   an error and aborts the transfer.
  */
-size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     static_cast<std::string*>(userp)->append(static_cast<char *>(contents), size * nmemb);
     return size * nmemb;
 }
@@ -131,15 +131,26 @@ void auth::authenticate() {
 }
 /**
  *
- * @param tR "refresh_token", provided to us by the JSON data in the authentication process.
+ * refresh_token, provided to us by the JSON data in the authentication process.
  *
  * Once our session expires, we can do a check on startup to see if it has expired, if it has
  * it will just "refresh" it, using the refresh_token provided.
  */
-void auth::refresh(const std::string& tR) {
+void auth::refresh() {
+    using json = nlohmann::json;
+    const std::string p = std::string(getenv("HOME")) + "/.config/golden-retriever/config.json";
+    std::ifstream file(p);
+    if (!file){std::cerr << "error accessing file: " << p << std::endl; return;}
+    json tokens;
+    file >> tokens;
+    //get our refresh_token
+    std::string tR = tokens.value("refresh_token", "");
+    if (tR.empty()) {std::cerr << "curr access token needs to be refreshed" << std::endl; return;}
+    file.close();
+
     const std::string postBody =
             "client_id="     + std::string(getenv("GOOGLE_CLIENT_ID")) +
-            "&client_secret=" + std::string(getenv("GOOGLE_CLIENT_SECRET")) +
+            "&client_secret=" + std::string(getenv("GOOGLE_CLIENT_SEC")) +
             "&refresh_token=" + tR +
             "&grant_type=refresh_token";
     CURL *curl = curl_easy_init();
@@ -151,7 +162,8 @@ void auth::refresh(const std::string& tR) {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     const CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
-    nlohmann::json newTokens = nlohmann::json::parse(response);
+    if (res != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res) << "\n"; return;}
+    json newTokens = json::parse(response);
     // refresh token doesn't change
     newTokens["refresh_token"] = tR;
     newTokens["expires_at"]    = std::time(nullptr) + newTokens["expires_in"].get<int>();
@@ -159,8 +171,5 @@ void auth::refresh(const std::string& tR) {
     std::ofstream outFile(tokenPath);
     outFile << newTokens.dump(4);
     outFile.close();
-}
-int main() {
-    auth::authenticate();
-    return 0;
+    std::cout <<"session refreshed" << std::endl;
 }

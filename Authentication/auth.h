@@ -9,9 +9,7 @@
 class auth {
     public:
         static void authenticate();
-        static void refresh(const std::string &tR);
+        static void refresh();
 };
-
-
 
 #endif //AUTH_H
