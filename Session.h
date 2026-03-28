@@ -11,10 +11,11 @@ class Session {
     public:
         std::string access_token;
         std::string refresh_token;
+        std::string currentSpreadsheetID;
         long expires_at= 0;
 
         static Session &get();
-        [[nodiscard]] bool isExpired() const;
+        bool isExpired() const;
 
         Session(const Session&) = delete;
         Session& operator=(const Session&) = delete;

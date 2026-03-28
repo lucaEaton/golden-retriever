@@ -175,7 +175,7 @@ void auth::loadSession() {
     using json = nlohmann::json;
     const std::string p = std::string(getenv("HOME")) + "/.config/golden-retriever/config.json";
     const int fd = open(p.c_str(), O_RDONLY);
-    if (fd == -1) {std::cerr << "error accessing file: " << p << std::endl; return;}
+    if (fd == -1) {std::cerr << "Having trouble accessing file, may be deleted. Try running the authentication method again " << p << std::endl; return;}
     struct stat sb{};
     fstat(fd, &sb);
     auto addr = mmap(nullptr, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
@@ -186,6 +186,39 @@ void auth::loadSession() {
     const json sessions = json::parse(session);
     Session::get().access_token = sessions.value("access_token","");
     Session::get().refresh_token = sessions.value("refresh_token","");
+    Session::get().currentSpreadsheetID= sessions.value("spreadsheetId","");
     Session::get().expires_at =  std::time(nullptr) + sessions["expires_in"].get<int>();
+    std::cout << "ur in" << std::endl;
     munmap(addr, sb.st_size);
+}
+
+
+void auth::addToConfig(const std::string& key, const std::string& value) {
+    const std::string path = std::string(getenv("HOME")) + "/.config/golden-retriever/config.json";
+    const int rfd = open(path.c_str(), O_RDONLY);
+    if (rfd == -1) { std::cerr << "failed to open" << std::endl; return; }
+    struct stat sb{};
+    fstat(rfd, &sb);
+    const auto addr = mmap(nullptr, sb.st_size, PROT_READ, MAP_PRIVATE, rfd, 0);
+    close(rfd);
+    if (addr == MAP_FAILED) { std::cerr << "mmap read failed" << std::endl; return; }
+    using json = nlohmann::json;
+    json config = json::parse(std::string_view(static_cast<const char*>(addr), sb.st_size), nullptr, false);
+    munmap(addr, sb.st_size);
+    if (config.is_discarded()) { std::cerr << "bad json" << std::endl; return; }
+    config[key] = value;
+    // write back
+    const std::string output = config.dump(4);
+    const size_t new_size = output.size();
+    const int wfd = open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (wfd == -1) { std::cerr << "failed to open for write\n"; return; }
+    // file size
+    ftruncate(wfd, new_size);
+    const auto write_addr = mmap(nullptr, new_size, PROT_WRITE, MAP_SHARED, wfd, 0);
+    close(wfd);
+    if (write_addr == MAP_FAILED) { std::cerr << "mmap write failed\n"; return; }
+    memcpy(write_addr, output.c_str(), new_size);
+    // cleanup
+    msync(write_addr, new_size, MS_SYNC);
+    munmap(write_addr, new_size);
 }

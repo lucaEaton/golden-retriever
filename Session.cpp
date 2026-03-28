@@ -4,11 +4,16 @@
 
 #include "Session.h"
 
+#include <iostream>
+#include <__ostream/basic_ostream.h>
+
 Session& Session::get() {
     static Session instance;
     return instance;
 }
 
 bool Session::isExpired() const{
-    return std::time(nullptr) >= expires_at;
+    const bool expired = std::time(nullptr) >= expires_at;
+    if (expired) std::cout << "session expired, refreshing..." << std::endl;
+    return expired;
 }
