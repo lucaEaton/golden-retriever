@@ -4,12 +4,12 @@
 
 #ifndef AUTH_H
 #define AUTH_H
-#include <cstddef>
+#include <string>
 
 class auth {
     public:
-        static std::size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp);
         static void authenticate();
+        static void refresh(const std::string &tR);
 };
 
 

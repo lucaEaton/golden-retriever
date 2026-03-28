@@ -42,7 +42,7 @@
  *   this to equal `size * nmemb`. Returning a smaller value signals
  *   an error and aborts the transfer.
  */
-size_t auth::WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     static_cast<std::string*>(userp)->append(static_cast<char *>(contents), size * nmemb);
     return size * nmemb;
 }
@@ -79,8 +79,7 @@ void auth::authenticate() {
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_addr.s_addr = INADDR_ANY;
     serverAddr.sin_port = htons(8080);
-    const int serverBind = bind(sockFD, reinterpret_cast<struct sockaddr *>(&serverAddr), sizeof(serverAddr));
-    if (serverBind == -1) {std::cerr << "error within binding" << std::endl; return;}
+    if (const int serverBind = bind(sockFD, reinterpret_cast<struct sockaddr *>(&serverAddr), sizeof(serverAddr)); serverBind == -1) {std::cerr << "error within binding" << std::endl; return;}
     listen(sockFD, 1);
     const int newSockFD = accept(sockFD, nullptr, nullptr);
     char buffer[4096] = {}; // 4KB
@@ -109,7 +108,7 @@ void auth::authenticate() {
     curl_easy_setopt(curl, CURLOPT_URL, "https://oauth2.googleapis.com/token");
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS,postBody.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, auth::WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
     CURLcode res = curl_easy_perform(curl);
@@ -119,7 +118,7 @@ void auth::authenticate() {
     // "HOME" is just /Users/YourMachinesUserName
     std::string configDir = std::string(getenv("HOME")) + "/.config/golden-retriever";
     std::filesystem::create_directories(configDir);
-    std::string tokenPath = configDir + "/tokens.json";
+    std::string tokenPath = configDir + "/config.json";
     std::ofstream file(tokenPath);
     if (!file.is_open()) {std::cerr << "Error: Could not open file for writing\n"; return;}
     // save the time for when our sesh expries.
@@ -129,9 +128,38 @@ void auth::authenticate() {
     file.close();
     // make it only readable by current user
     chmod(tokenPath.c_str(), 0600);
-    std::cout << "Tokens saved to " << tokenPath << "\n";
 }
-void
+/**
+ *
+ * @param tR "refresh_token", provided to us by the JSON data in the authentication process.
+ *
+ * Once our session expires, we can do a check on startup to see if it has expired, if it has
+ * it will just "refresh" it, using the refresh_token provided.
+ */
+void auth::refresh(const std::string& tR) {
+    const std::string postBody =
+            "client_id="     + std::string(getenv("GOOGLE_CLIENT_ID")) +
+            "&client_secret=" + std::string(getenv("GOOGLE_CLIENT_SECRET")) +
+            "&refresh_token=" + tR +
+            "&grant_type=refresh_token";
+    CURL *curl = curl_easy_init();
+    std::string response;
+    curl_easy_setopt(curl, CURLOPT_URL, "https://oauth2.googleapis.com/token");
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS,postBody.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    const CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    nlohmann::json newTokens = nlohmann::json::parse(response);
+    // refresh token doesn't change
+    newTokens["refresh_token"] = tR;
+    newTokens["expires_at"]    = std::time(nullptr) + newTokens["expires_in"].get<int>();
+    std::string tokenPath = std::string(getenv("HOME")) + "/.config/golden-retriever/config.json";
+    std::ofstream outFile(tokenPath);
+    outFile << newTokens.dump(4);
+    outFile.close();
+}
 int main() {
     auth::authenticate();
     return 0;
