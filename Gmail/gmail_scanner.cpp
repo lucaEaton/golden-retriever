@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <curl/curl.h>
+#include "../Session.h"
 
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     static_cast<std::string*>(userp)->append(static_cast<char *>(contents), size * nmemb);
@@ -21,16 +22,8 @@ bool isValidDate(const std::string& date) {
 
 void gmail_scanner::scan(std::string& date) {
     if (!isValidDate(date)) {std::cerr << "invalid date format, expected YYYY/MM/DD (e.g. 2025/01/01)" << std::endl; return;}
-    using json = nlohmann::json;
-    const std::string p = std::string(getenv("HOME")) + "/.config/golden-retriever/config.json";
-    std::ifstream file(p);
-    if (!file){std::cerr << "error accessing file: " << p << std::endl; return;}
-    json tokens;
-    file >> tokens;
-    std::string access_token = tokens.value("access_token", "");
+    std::string access_token = Session::get().access_token;
     if (access_token.empty()) {std::cerr << "curr access token needs to be refreshed" << std::endl; return;}
-    file.close();
-
     std::string q =
     "subject:\"thanks for applying\" OR "
     "subject:\"thank you for applying\" OR "
@@ -62,6 +55,7 @@ void gmail_scanner::scan(std::string& date) {
     curl_easy_cleanup(curl);
     if (res != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res) << "\n"; return;}
     std::cout << listIDs << std::endl;
+    using json = nlohmann::json;
     for (json ids = json::parse(listIDs); auto& email : ids["messages"]) {
         std::string emailID = email.value("id","");
         std::string url = "https://www.googleapis.com/gmail/v1/users/me/messages/" + emailID + "?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date";
@@ -84,6 +78,5 @@ void gmail_scanner::scan(std::string& date) {
         json meta = json::parse(meta_response);
         std::string subject, from, date;
         std::cout << meta_response << std::endl;
-
     }
 }

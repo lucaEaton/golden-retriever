@@ -10,6 +10,7 @@ class auth {
     public:
         static void authenticate();
         static void refresh();
+        static void loadSession();
 };
 
 #endif //AUTH_H

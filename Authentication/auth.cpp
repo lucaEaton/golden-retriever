@@ -7,13 +7,16 @@
 #include <string>
 #include <curl/curl.h>
 #include <sys/socket.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <unistd.h>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
-#include <sys/stat.h>
+#include "../Session.h"
 /**
  * @note
  * Sourced from StackOverflow, will allow me to store the JSON data within a string, to further than parse through the data.
@@ -84,7 +87,7 @@ void auth::authenticate() {
     const int newSockFD = accept(sockFD, nullptr, nullptr);
     char buffer[4096] = {}; // 4KB
     read(newSockFD, buffer, sizeof(buffer));
-    std::cout << buffer << std::endl;
+    //std::cout << buffer << std::endl;
     const auto httpmsg = "HTTP/1.1 200 OK\r\nContent-Length: 33\r\n\r\nReturn back to the your terminal.";
     write(newSockFD, httpmsg, strlen(httpmsg));
     close(newSockFD);
@@ -137,16 +140,8 @@ void auth::authenticate() {
  * it will just "refresh" it, using the refresh_token provided.
  */
 void auth::refresh() {
-    using json = nlohmann::json;
-    const std::string p = std::string(getenv("HOME")) + "/.config/golden-retriever/config.json";
-    std::ifstream file(p);
-    if (!file){std::cerr << "error accessing file: " << p << std::endl; return;}
-    json tokens;
-    file >> tokens;
-    //get our refresh_token
-    std::string tR = tokens.value("refresh_token", "");
+    std::string tR = Session::get().refresh_token;
     if (tR.empty()) {std::cerr << "curr access token needs to be refreshed" << std::endl; return;}
-    file.close();
 
     const std::string postBody =
             "client_id="     + std::string(getenv("GOOGLE_CLIENT_ID")) +
@@ -163,6 +158,8 @@ void auth::refresh() {
     const CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
     if (res != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res) << "\n"; return;}
+
+    using json = nlohmann::json;
     json newTokens = json::parse(response);
     // refresh token doesn't change
     newTokens["refresh_token"] = tR;
@@ -172,4 +169,23 @@ void auth::refresh() {
     outFile << newTokens.dump(4);
     outFile.close();
     std::cout <<"session refreshed" << std::endl;
+}
+
+void auth::loadSession() {
+    using json = nlohmann::json;
+    const std::string p = std::string(getenv("HOME")) + "/.config/golden-retriever/config.json";
+    const int fd = open(p.c_str(), O_RDONLY);
+    if (fd == -1) {std::cerr << "error accessing file: " << p << std::endl; return;}
+    struct stat sb{};
+    fstat(fd, &sb);
+    auto addr = mmap(nullptr, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (addr == MAP_FAILED) {std::cerr << "mmap failed " << std::endl; return;}
+
+    std::string_view session(static_cast<const char*>(addr), sb.st_size);
+    const json sessions = json::parse(session);
+    Session::get().access_token = sessions.value("access_token","");
+    Session::get().refresh_token = sessions.value("refresh_token","");
+    Session::get().expires_at =  std::time(nullptr) + sessions["expires_in"].get<int>();
+    munmap(addr, sb.st_size);
 }
