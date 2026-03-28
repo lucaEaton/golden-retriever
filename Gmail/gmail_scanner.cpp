@@ -77,13 +77,13 @@ void gmail_scanner::scan(std::string& date) {
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &meta_response);
 
-        curl_easy_perform(curl);
-        json meta = json::parse(meta_response);
-        std::string subject, from, date;
-        std::cout << meta_response << std::endl;
         CURLcode res2 = curl_easy_perform(curl);
         if (res2 != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res2) << "\n"; return;}
         curl_easy_cleanup(curl);
         curl_slist_free_all(headers);
+        json meta = json::parse(meta_response);
+        std::string subject, from, date;
+        std::cout << meta_response << std::endl;
+
     }
 }
