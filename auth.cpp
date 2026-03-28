@@ -46,6 +46,19 @@ size_t auth::WriteCallback(void* contents, size_t size, size_t nmemb, void* user
     static_cast<std::string*>(userp)->append(static_cast<char *>(contents), size * nmemb);
     return size * nmemb;
 }
+/**
+ * @brief Authenticates the user via Google OAuth 2.0 Authorization Code Flow.
+ *
+ * Opens the Google consent screen in the user's default browser, spins up a
+ * temporary local socket server on port 8080 to capture the redirect, exchanges
+ * the authorization code for access and refresh tokens, and persists them to
+ * ~/.config/golden-retriever/tokens.json.
+ *
+ * @note Requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SEC environment variables to be set.
+ * @note Tokens are saved with 0600 permissions — readable by the current user only.
+ * @note This function blocks until the user completes the browser login flow.
+ *
+ */
 void auth::authenticate() {
     const std::string clientID = std::getenv("GOOGLE_CLIENT_ID");
     const std::string url =
@@ -98,7 +111,7 @@ void auth::authenticate() {
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS,postBody.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, auth::WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+    //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
     CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
     if (res != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res) << "\n"; return;}
@@ -118,8 +131,7 @@ void auth::authenticate() {
     chmod(tokenPath.c_str(), 0600);
     std::cout << "Tokens saved to " << tokenPath << "\n";
 }
-
-
+void
 int main() {
     auth::authenticate();
     return 0;
