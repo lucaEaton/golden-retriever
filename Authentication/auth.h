@@ -10,6 +10,8 @@ class auth {
     public:
         static void authenticate();
         static void refresh();
+        static void loadSession();
+        static void addToConfig(const std::string &key, const std::string &value);
 };
 
 #endif //AUTH_H

@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <curl/curl.h>
+#include "../Session.h"
 
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     static_cast<std::string*>(userp)->append(static_cast<char *>(contents), size * nmemb);
@@ -19,31 +20,56 @@ bool isValidDate(const std::string& date) {
     return strptime(date.c_str(), "%Y/%m/%d", &t) != nullptr;
 }
 
+/**
+ * @brief Scans the authenticated user's Gmail inbox for job application
+ *        confirmation emails and extracts metadata from each result.
+ *
+ * Queries the Gmail API using a broad set of subject-line keywords commonly
+ * used by applicant tracking systems (e.g. "thanks for applying", "application
+ * received"). Results are filtered by the provided date, limiting the search
+ * to emails received after that point. For each matching message ID returned
+ * by the list endpoint, a second request is made to fetch the Subject, From,
+ * and Date headers via the metadata format.
+ *
+ * @param date
+ *   The earliest date to scan from, in YYYY/MM/DD format (e.g. "2025/01/01").
+ *   Validated before any API call is made — the function returns early on
+ *   an invalid format.
+ *
+ * @note Requires a valid, non-expired access token to be present in Session::get().
+ *       Call auth::refresh() before invoking this function if the session may
+ *       be expired.
+ *
+ * @note Gmail's messages.list endpoint returns a maximum of 200 results per
+ *       request. If the user has applied to more than 200 jobs since @p date,
+ *       pagination via nextPageToken will be required.
+ *
+ * @note Each message ID from the list response incurs a separate HTTP request
+ *       to the messages.get endpoint. For 200 results this means 201 total
+ *       API calls — one list + one metadata fetch per message.
+ *
+ * @warning json::parse will throw if the API returns malformed or unexpected
+ *          JSON (e.g. on a 401 Unauthorized response). Consider wrapping parse
+ *          calls with the non-throwing overload:
+ *          json::parse(str, nullptr, false) and checking is_discarded().
+ *
+ */
 void gmail_scanner::scan(std::string& date) {
     if (!isValidDate(date)) {std::cerr << "invalid date format, expected YYYY/MM/DD (e.g. 2025/01/01)" << std::endl; return;}
-    using json = nlohmann::json;
-    const std::string p = std::string(getenv("HOME")) + "/.config/golden-retriever/config.json";
-    std::ifstream file(p);
-    if (!file){std::cerr << "error accessing file: " << p << std::endl; return;}
-    json tokens;
-    file >> tokens;
-    std::string access_token = tokens.value("access_token", "");
+    std::string access_token = Session::get().access_token;
     if (access_token.empty()) {std::cerr << "curr access token needs to be refreshed" << std::endl; return;}
-    file.close();
-
     std::string q =
-    "subject:\"thanks for applying\" OR "
-    "subject:\"thank you for applying\" OR "
-    "subject:\"application received\" OR "
-    "subject:\"we received your application\" OR "
-    "subject:\"thanks for your application\" OR "
-    "subject:\"thank you for your application\" OR "
-    "subject:\"application confirmation\" OR "
-    "subject:\"application submitted\" OR "
-    "subject:\"you applied to\" OR "
-    "subject:\"your application to\""
-    "after:"+date;
-
+        "subject:\"thanks for applying\" OR "
+        "subject:\"thank you for applying\" OR "
+        "subject:\"application received\" OR "
+        "subject:\"we received your application\" OR "
+        "subject:\"thanks for your application\" OR "
+        "subject:\"thank you for your application\" OR "
+        "subject:\"application confirmation\" OR "
+        "subject:\"application submitted\" OR "
+        "subject:\"you applied to\" OR "
+        "subject:\"your application to\""
+        "after:"+date;
     CURL *curl = curl_easy_init();
     char* encoded = curl_easy_escape(curl, q.c_str(), q.size());
     std::string list_url = "https://www.googleapis.com/gmail/v1/users/me/messages?maxResults=200&q=" + std::string(encoded);
@@ -60,8 +86,9 @@ void gmail_scanner::scan(std::string& date) {
     CURLcode res = curl_easy_perform(curl);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
-    if (res != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res) << "\n"; return;}
+    if (res != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res) << std::endl; return;}
     std::cout << listIDs << std::endl;
+    using json = nlohmann::json;
     for (json ids = json::parse(listIDs); auto& email : ids["messages"]) {
         std::string emailID = email.value("id","");
         std::string url = "https://www.googleapis.com/gmail/v1/users/me/messages/" + emailID + "?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date";
@@ -77,13 +104,12 @@ void gmail_scanner::scan(std::string& date) {
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &meta_response);
 
-        curl_easy_perform(curl);
-        json meta = json::parse(meta_response);
-        std::string subject, from, date;
-        std::cout << meta_response << std::endl;
         CURLcode res2 = curl_easy_perform(curl);
         if (res2 != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res2) << "\n"; return;}
         curl_easy_cleanup(curl);
         curl_slist_free_all(headers);
+        json meta = json::parse(meta_response);
+        std::string subject, from, date;
+        std::cout << meta_response << std::endl;
     }
 }
