@@ -9,6 +9,10 @@
 #include <iostream>
 #include <string>
 #include <curl/curl.h>
+#include <regex>
+#include <sstream>
+#include <unordered_set>
+
 #include "../Session.h"
 
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
@@ -54,7 +58,7 @@ bool isValidDate(const std::string& date) {
  *          json::parse(str, nullptr, false) and checking is_discarded().
  *
  */
-void gmail_scanner::scan(std::string& date) {
+void gmail_scanner::scan(const std::string& date) {
     if (!isValidDate(date)) {std::cerr << "invalid date format, expected YYYY/MM/DD (e.g. 2025/01/01)" << std::endl; return;}
     std::string access_token = Session::get().access_token;
     if (access_token.empty()) {std::cerr << "curr access token needs to be refreshed" << std::endl; return;}
@@ -68,33 +72,42 @@ void gmail_scanner::scan(std::string& date) {
         "subject:\"application confirmation\" OR "
         "subject:\"application submitted\" OR "
         "subject:\"you applied to\" OR "
-        "subject:\"your application to\""
-        "after:"+date;
+        "subject:\"your application to\" "
+        "after:" + date;
+
     CURL *curl = curl_easy_init();
+
     char* encoded = curl_easy_escape(curl, q.c_str(), q.size());
     std::string list_url = "https://www.googleapis.com/gmail/v1/users/me/messages?maxResults=200&q=" + std::string(encoded);
     curl_free(encoded); // delete
+
     std::string list_header = "Authorization: Bearer " + access_token;
     curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, list_header.c_str());
+
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_URL, list_url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+
     std::string listIDs;
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &listIDs);
     CURLcode res = curl_easy_perform(curl);
     curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    if (res != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res) << std::endl; return;}
-    std::cout << listIDs << std::endl;
+
+    if (res != CURLE_OK) {
+        std::cerr << "curl error: " << curl_easy_strerror(res) << std::endl;
+        curl_easy_cleanup(curl);
+        return;
+    }
+
     using json = nlohmann::json;
     for (json ids = json::parse(listIDs); auto& email : ids["messages"]) {
         std::string emailID = email.value("id","");
         std::string url = "https://www.googleapis.com/gmail/v1/users/me/messages/" + emailID + "?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date";
-        curl = curl_easy_init();
+
+        curl_easy_reset(curl);
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        std::string meta_response;
 
         std::string auth_header = "Authorization: Bearer " + access_token;
         headers = nullptr;
@@ -102,14 +115,91 @@ void gmail_scanner::scan(std::string& date) {
 
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+
+        std::string meta_response;
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &meta_response);
 
+
         CURLcode res2 = curl_easy_perform(curl);
-        if (res2 != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res2) << "\n"; return;}
-        curl_easy_cleanup(curl);
         curl_slist_free_all(headers);
-        json meta = json::parse(meta_response);
-        std::string subject, from, date;
-        std::cout << meta_response << std::endl;
+        if (res2 != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res2) <<std::endl; continue;}
+        json meta = json::parse(meta_response, nullptr, false);
+        if (!meta.is_discarded()) {
+            std::cout << meta << std::endl;
+            metadata_emails_.push_back(std::move(meta));
+        }
     }
+    curl_easy_cleanup(curl);
+}
+
+void gmail_scanner::fetch(const std::string& date) {
+    scan(date);
+    std::regex r(R"((?:to\s+)([^!.,\n-]+?)(?:\s+-\s+|\s+(?:has|have|is|was|will|are)|[!.,]|$))");
+    std::smatch match;
+    static const std::vector<std::pair<std::string, std::string>> status_keywords = {
+        {"unfortunately","Rejected"},
+        {"not moving forward","Rejected"},
+        {"other candidates","Rejected"},
+        {"position has been filled","Rejected"},
+        {"decided to pursue","Rejected"},
+        {"pleased to offer","Offer"},
+        {"join our team","Offer"},
+        {"offer","Offer"},
+        {"interview","Interview"},
+        {"next steps","Interview"},
+        {"schedule a call","Interview"},
+        {"coding challenge","Interview"},
+        {"technical screen","Interview"},
+        {"take home","Interview"},
+        {"under review","In Review"},
+        {"being reviewed","In Review"},
+        {"not to proceed","Rejected"}
+    };
+
+    for (auto& email : metadata_emails_) {
+        std::string company, from, date_applied, status;
+        std::string thread_id = email.value("threadId", "");
+        for(auto& payload : email["payload"]["headers"]) {
+            std::string name  = payload.value("name", "");
+            std::string value = payload.value("value", "");
+            if (name == "Subject") {
+                if (std::regex_search(value,match,r)) {
+                    company = match[1].str();
+                }
+            } else if (name == "Date") {
+                std::tm tm = {};
+                std::stringstream ss(value);
+                ss >> std::get_time(&tm, "%a, %d %b %Y");
+                char formatted[20];
+                std::strftime(formatted, sizeof(formatted), "%Y/%m/%d", &tm);
+                date_applied = std::string(formatted);
+            }else if (name == "From") {from = value;}
+        }
+        if ((company.empty() || company.find("Intern") != std::string::npos || company.find("Engineer") != std::string::npos) ){
+            if (auto it = from.find('@'); it != std::string::npos) {
+                auto period = from.find('.', it);
+                company = from.substr(it+1, period-it-1);
+                if (company == "myworkday") {
+                    auto it2 = from.find('<');
+                    company = from.substr(it2+1, it-it2-1);
+                }
+                company[0] = std::toupper(company[0]);
+            }
+        }
+
+        status = "Applied";
+        std::string snippet = email.value("snippet", "");
+        for (const auto& [k, s] : status_keywords) {
+            if (snippet.find(k) != std::string::npos) {
+                status = s;
+                break;
+            }
+        }
+        std::cout << "company: '" << company << "' date: '" << date_applied << "' status: '" << status << "' Thread ID: "<< thread_id << std::endl;
+        emails_.emplace_back(company, "", date_applied, status);
+    }
+}
+
+std::vector<gmail_scanner::EmailMetadata> gmail_scanner::getEmailData() {
+    return emails_;
 }

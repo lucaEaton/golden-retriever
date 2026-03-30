@@ -164,6 +164,9 @@ void auth::refresh() {
     // refresh token doesn't change
     newTokens["refresh_token"] = tR;
     newTokens["expires_at"]    = std::time(nullptr) + newTokens["expires_in"].get<int>();
+    Session::get().access_token = newTokens["access_token"];
+    Session::get().refresh_token = newTokens["refresh_token"];
+    Session::get().expires_at = newTokens["expires_at"];
     std::string tokenPath = std::string(getenv("HOME")) + "/.config/golden-retriever/config.json";
     std::ofstream outFile(tokenPath);
     outFile << newTokens.dump(4);
@@ -184,10 +187,10 @@ void auth::loadSession() {
 
     std::string_view session(static_cast<const char*>(addr), sb.st_size);
     const json sessions = json::parse(session);
-    Session::get().access_token = sessions.value("access_token","");
-    Session::get().refresh_token = sessions.value("refresh_token","");
-    Session::get().currentSpreadsheetID= sessions.value("spreadsheetId","");
-    Session::get().expires_at =  std::time(nullptr) + sessions["expires_in"].get<int>();
+    Session::get().access_token  = sessions.value("access_token", "");
+    Session::get().refresh_token = sessions.value("refresh_token", "");
+    Session::get().currentSpreadsheetID = sessions.value("spreadsheetId", "");
+    Session::get().expires_at = sessions.value("expires_at", 0);
     std::cout << "ur in" << std::endl;
     munmap(addr, sb.st_size);
 }

@@ -24,6 +24,4 @@ class Session {
 
 };
 
-
-
 #endif //SESSION_H
