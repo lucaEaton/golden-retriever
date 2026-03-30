@@ -18,6 +18,7 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
 }
 
 void Spreadsheet::createSpreadsheet() {
+    if (!Session::get().currentSpreadsheetID.empty()) {std::cerr << "Spreadsheet is already set | ID: " << Session::get().currentSpreadsheetID <<std::endl; return;}
     using json = nlohmann::json;
     json body;
     body["properties"]["title"] = "Golden Retriever Jobs";
@@ -52,8 +53,6 @@ void Spreadsheet::createSpreadsheet() {
     }
 
     Session::get().currentSpreadsheetID= result["spreadsheetId"];
-    auth::addToConfig("spreadsheetID", result["spreadsheetId"]);
-    std::cout << "Created A New Spreadsheet: " << body["properties"]["title"] << "ID: " << Session::get().currentSpreadsheetID << std::endl;
+    auth::addToConfig("spreadsheetId", result["spreadsheetId"]);
+    std::cout << "Created A New Spreadsheet: " << body["properties"]["title"] << " | ID: " << Session::get().currentSpreadsheetID << std::endl;
 }
-
-// void Spreadsheet::

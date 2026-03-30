@@ -4,11 +4,14 @@
 
 #ifndef SPREADSHEET_H
 #define SPREADSHEET_H
-
+#include <vector>
+#include <nlohmann/json.hpp>
 
 
 class Spreadsheet {
-    static void createSpreadsheet();
+    public:
+        static void createSpreadsheet();
+        //void Spreadsheet::fillSpreadsheet(const std::vector<nlohmann::json>& metadata);
 };
 
 
