@@ -12,10 +12,10 @@
 #include <regex>
 #include <sstream>
 #include <unordered_set>
+#include <cctype>
 
 #include "../Session.h"
 #include "../turbo-b64/turbob64.h"
-#include "../turbo-b64/turbob64_.h"
 
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     static_cast<std::string*>(userp)->append(static_cast<char *>(contents), size * nmemb);
@@ -125,8 +125,7 @@ void gmail_scanner::scan(const std::string& date, const bool debug) {
         CURLcode res2 = curl_easy_perform(curl);
         curl_slist_free_all(headers);
         if (res2 != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res2) <<std::endl; continue;}
-        json meta = json::parse(meta_response, nullptr, false);
-        if (!meta.is_discarded()) {
+        if (json meta = json::parse(meta_response, nullptr, false); !meta.is_discarded()) {
             if (debug) std::cout << meta << std::endl;
             metadata_emails_.push_back(std::move(meta));
         }
@@ -147,39 +146,83 @@ std::string gTsB64(const std::string& in) {
 }
 
 std::string decode_B64(const std::string &in) {
+    if (in.empty()) return ""; // catch if nothing
     const auto s = gTsB64(in);
     std::string decoded;
     decoded.resize(tb64declen(reinterpret_cast<const unsigned char *>(s.data()),s.size()));
-    const auto body_size = tb64dec(reinterpret_cast<const unsigned char *>(s.data()), s.size(),reinterpret_cast<unsigned char *>(decoded.data()));
-    if (body_size <= 0) {
+    tb64dec(reinterpret_cast<const unsigned char *>(s.data()), s.size(),reinterpret_cast<unsigned char *>(decoded.data()));
+    if (decoded.empty()) {
         std::cerr << "invalid base64 input or input length = 0" << std::endl; return "";
     }
-    decoded.resize(body_size);
     return decoded;
 }
 
 void gmail_scanner::fetch(const std::string& date, const bool debug) {
-    scan(date,true);
+    scan(date);
     std::regex r(R"((?:to\s+)([^!.,\n-]+?)(?:\s+-\s+|\s+(?:has|have|is|was|will|are)|[!.,]|$))");
     std::smatch match;
     static const std::vector<std::pair<std::string, std::string>> status_keywords = {
+        // rejected
         {"unfortunately","Rejected"},
         {"not moving forward","Rejected"},
+        {"not to move forward","Rejected"},
         {"other candidates","Rejected"},
+        {"another candidate","Rejected"},
         {"position has been filled","Rejected"},
         {"decided to pursue","Rejected"},
+        {"not to proceed","Rejected"},
+        {"not selected","Rejected"},
+        {"not be moving","Rejected"},
+        {"no longer","Rejected"},
+        {"regret to inform","Rejected"},
+        {"moved forward with other","Rejected"},
+        {"will not be moving","Rejected"},
+        {"does not match","Rejected"},
+        {"more closely matches our needs","Rejected"},
+        {"after careful consideration","Rejected"},
+        {"we have concluded","Rejected"},
+        {"not a fit","Rejected"},
+        {"pursue other candidates","Rejected"},
+        {"filled the position","Rejected"},
+        {"not advance","Rejected"},
+
+        // offer
         {"pleased to offer","Offer"},
-        {"join our team","Offer"},
-        {"offer","Offer"},
-        {"interview","Interview"},
-        {"next steps","Interview"},
-        {"schedule a call","Interview"},
+        {"we would like to offer","Offer"},
+        {"offer of employment","Offer"},
+        {"official offer","Offer"},
+        {"compensation package","Offer"},
+        {"start date","Offer"},
+        {"onboarding","Offer"},
+        {"welcome to the team","Offer"},
+
+        // interview
+        {"invite you to interview","Interview"},
+        {"schedule an interview","Interview"},
+        {"phone screen","Interview"},
+        {"video interview","Interview"},
+        {"zoom interview","Interview"},
+        {"teams interview","Interview"},
+        {"hiring manager","Interview"},
         {"coding challenge","Interview"},
         {"technical screen","Interview"},
         {"take home","Interview"},
+        {"technical assessment","Interview"},
+        {"online assessment","Interview"},
+        {"hacker rank","Interview"},
+        {"codesignal","Interview"},
+        {"we'd like to learn more","Interview"},
+        {"move you forward","Interview"},
+        {"move forward with you","Interview"},
+        {"speak with you","Interview"},
+
+        // In Review
         {"under review","In Review"},
         {"being reviewed","In Review"},
-        {"not to proceed","Rejected"}
+        {"reviewing your application","In Review"},
+        {"carefully review","In Review"},
+        {"our team will review","In Review"},
+        {"currently reviewing","In Review"},
     };
 
     for (auto& email : metadata_emails_) {
@@ -204,32 +247,58 @@ void gmail_scanner::fetch(const std::string& date, const bool debug) {
             }
             else if (name == "From") {from = value;}
         }
+        //used for scoring
+        int interview = 0, review = 0, rejected = 0, offer = 0;
+
+        //best case, data is up for grabs
+        if (!payload.contains("parts") && payload["body"].contains("data")) {
+            if (std::string data = payload["body"]["data"]; !data.empty()) {
+                std::string body = decode_B64(data);
+                std::ranges::transform(body, body.begin(), ::tolower);
+                status = "Applied";
+                for (const auto& [k, s] : status_keywords) {
+                    if (body.find(k) != std::string::npos) {
+                        if (s == "Interview") interview++;
+                        else if (s == "Rejected") rejected++;
+                        else if (s == "Offer") offer++;
+                        else if (s == "In Review") review++;
+                    }
+                }
+            }
+        }
+
         for (auto& parts : payload["parts"]) {
             const std::string mimeType = parts.value("mimeType", "");
             if (mimeType == "text/plain") {
                 if (!parts["body"].contains("data")) continue;
                 std::string body = decode_B64(parts["body"]["data"]);
+                std::ranges::transform(body, body.begin(), ::tolower);
                 status = "Applied";
                 for (const auto& [k, s] : status_keywords) {
                     if (body.find(k) != std::string::npos) {
-                        status = s;
-                        break;
+                        if (s == "Interview") interview++;
+                        else if (s == "Rejected") rejected++;
+                        else if (s == "Offer") offer++;
+                        else if (s == "In Review") review++;
                     }
                 }
-                break;
             }
             if (mimeType == "multipart/related") {
                 for (const auto& inner_parts : parts["parts"]) {
-                    if (std::string innerMime = inner_parts.value("mimeType", ""); innerMime != "text/html" && innerMime != "text/plain" && !inner_parts["body"].contains("data")) continue; // ← add this
+                    const auto innerMime = inner_parts.value("mimeType", "");
+                    if (innerMime != "text/html" && innerMime != "text/plain") continue; // wrong mime
+                    if (!inner_parts["body"].contains("data")) continue;
                     std::string body = decode_B64(inner_parts["body"]["data"]);
+                    std::ranges::transform(body, body.begin(), ::tolower);
                     status = "Applied";
                     for (const auto& [k, s] : status_keywords) {
                         if (body.find(k) != std::string::npos) {
-                            status = s;
-                            break;
+                            if (s == "Interview") interview++;
+                            else if (s == "Rejected") rejected++;
+                            else if (s == "Offer") offer++;
+                            else if (s == "In Review") review++;
                         }
                     }
-                    break;
                 }
             }
         }
@@ -245,6 +314,12 @@ void gmail_scanner::fetch(const std::string& date, const bool debug) {
                 company[0] = std::toupper(company[0]);
             }
         }
+        // prioritize status as some scores may be equal to one another
+        if (int score = std::max({interview, offer, rejected, review}); score == 0) status = "Applied";
+        else if (score == rejected) status = "Rejected";
+        else if (score == offer) status = "Offer";
+        else if (score == interview) status = "Interview";
+        else if (score == review) status = "In Review";
         if (debug) std::cout << "company: '" << company << "' date: '" << date_applied << "' status: '" << status << "' Thread ID: "<< thread_id << std::endl;
         emails_.emplace_back(company, "", date_applied, status);
     }
