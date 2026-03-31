@@ -14,6 +14,8 @@
 #include <unordered_set>
 
 #include "../Session.h"
+#include "../turbo-b64/turbob64.h"
+#include "../turbo-b64/turbob64_.h"
 
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     static_cast<std::string*>(userp)->append(static_cast<char *>(contents), size * nmemb);
@@ -58,7 +60,7 @@ bool isValidDate(const std::string& date) {
  *          json::parse(str, nullptr, false) and checking is_discarded().
  *
  */
-void gmail_scanner::scan(const std::string& date) {
+void gmail_scanner::scan(const std::string& date, const bool debug) {
     if (!isValidDate(date)) {std::cerr << "invalid date format, expected YYYY/MM/DD (e.g. 2025/01/01)" << std::endl; return;}
     std::string access_token = Session::get().access_token;
     if (access_token.empty()) {std::cerr << "curr access token needs to be refreshed" << std::endl; return;}
@@ -104,7 +106,7 @@ void gmail_scanner::scan(const std::string& date) {
     using json = nlohmann::json;
     for (json ids = json::parse(listIDs); auto& email : ids["messages"]) {
         std::string emailID = email.value("id","");
-        std::string url = "https://www.googleapis.com/gmail/v1/users/me/messages/" + emailID + "?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date";
+        std::string url = "https://www.googleapis.com/gmail/v1/users/me/messages/" + emailID + "?format=full";
 
         curl_easy_reset(curl);
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -125,15 +127,39 @@ void gmail_scanner::scan(const std::string& date) {
         if (res2 != CURLE_OK) {std::cerr << "curl error: " << curl_easy_strerror(res2) <<std::endl; continue;}
         json meta = json::parse(meta_response, nullptr, false);
         if (!meta.is_discarded()) {
-            std::cout << meta << std::endl;
+            if (debug) std::cout << meta << std::endl;
             metadata_emails_.push_back(std::move(meta));
         }
     }
     curl_easy_cleanup(curl);
 }
+//since gmail uses safe b64, I assume turbo uses the standard b64 formatting, so we do this in order to avoid mismatched formats
+std::string gTsB64(const std::string& in) {
+    auto out = in;
+    std::ranges::replace(out, '-', '+');
+    std::ranges::replace(out, '_', '/');
 
-void gmail_scanner::fetch(const std::string& date) {
-    scan(date);
+    // add back missing padding
+    while (out.size() % 4 != 0) {
+        out += '=';
+    }
+    return out;
+}
+
+std::string decode_B64(const std::string &in) {
+    const auto s = gTsB64(in);
+    std::string decoded;
+    decoded.resize(tb64declen(reinterpret_cast<const unsigned char *>(s.data()),s.size()));
+    const auto body_size = tb64dec(reinterpret_cast<const unsigned char *>(s.data()), s.size(),reinterpret_cast<unsigned char *>(decoded.data()));
+    if (body_size <= 0) {
+        std::cerr << "invalid base64 input or input length = 0" << std::endl; return "";
+    }
+    decoded.resize(body_size);
+    return decoded;
+}
+
+void gmail_scanner::fetch(const std::string& date, const bool debug) {
+    scan(date,true);
     std::regex r(R"((?:to\s+)([^!.,\n-]+?)(?:\s+-\s+|\s+(?:has|have|is|was|will|are)|[!.,]|$))");
     std::smatch match;
     static const std::vector<std::pair<std::string, std::string>> status_keywords = {
@@ -159,22 +185,55 @@ void gmail_scanner::fetch(const std::string& date) {
     for (auto& email : metadata_emails_) {
         std::string company, from, date_applied, status;
         std::string thread_id = email.value("threadId", "");
-        for(auto& payload : email["payload"]["headers"]) {
-            std::string name  = payload.value("name", "");
-            std::string value = payload.value("value", "");
+        auto& payload = email["payload"];
+        for (auto& header : payload["headers"]) {
+            std::string name  = header.value("name", "");
+            std::string value = header.value("value", "");
             if (name == "Subject") {
                 if (std::regex_search(value,match,r)) {
                     company = match[1].str();
                 }
-            } else if (name == "Date") {
+            }
+            else if (name == "Date") {
                 std::tm tm = {};
                 std::stringstream ss(value);
                 ss >> std::get_time(&tm, "%a, %d %b %Y");
                 char formatted[20];
                 std::strftime(formatted, sizeof(formatted), "%Y/%m/%d", &tm);
                 date_applied = std::string(formatted);
-            }else if (name == "From") {from = value;}
+            }
+            else if (name == "From") {from = value;}
         }
+        for (auto& parts : payload["parts"]) {
+            const std::string mimeType = parts.value("mimeType", "");
+            if (mimeType == "text/plain") {
+                if (!parts["body"].contains("data")) continue;
+                std::string body = decode_B64(parts["body"]["data"]);
+                status = "Applied";
+                for (const auto& [k, s] : status_keywords) {
+                    if (body.find(k) != std::string::npos) {
+                        status = s;
+                        break;
+                    }
+                }
+                break;
+            }
+            if (mimeType == "multipart/related") {
+                for (const auto& inner_parts : parts["parts"]) {
+                    if (std::string innerMime = inner_parts.value("mimeType", ""); innerMime != "text/html" && innerMime != "text/plain" && !inner_parts["body"].contains("data")) continue; // ← add this
+                    std::string body = decode_B64(inner_parts["body"]["data"]);
+                    status = "Applied";
+                    for (const auto& [k, s] : status_keywords) {
+                        if (body.find(k) != std::string::npos) {
+                            status = s;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
         if ((company.empty() || company.find("Intern") != std::string::npos || company.find("Engineer") != std::string::npos) ){
             if (auto it = from.find('@'); it != std::string::npos) {
                 auto period = from.find('.', it);
@@ -186,16 +245,7 @@ void gmail_scanner::fetch(const std::string& date) {
                 company[0] = std::toupper(company[0]);
             }
         }
-
-        status = "Applied";
-        std::string snippet = email.value("snippet", "");
-        for (const auto& [k, s] : status_keywords) {
-            if (snippet.find(k) != std::string::npos) {
-                status = s;
-                break;
-            }
-        }
-        std::cout << "company: '" << company << "' date: '" << date_applied << "' status: '" << status << "' Thread ID: "<< thread_id << std::endl;
+        if (debug) std::cout << "company: '" << company << "' date: '" << date_applied << "' status: '" << status << "' Thread ID: "<< thread_id << std::endl;
         emails_.emplace_back(company, "", date_applied, status);
     }
 }
