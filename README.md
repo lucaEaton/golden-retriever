@@ -26,6 +26,6 @@ I also want to implement updating, it still store the last date and time you sca
 The name 'Golden Retriver', it will play fetch with you, retrieving ur email and returning it to your spreadsheet. Instead of a ball or stick,
 its your emails.
 
-Doing so will allow me to automate this but also keep track of where I've applied, who has responded, who ghosted me, etc...
+Doing so will allow me to automate this, keeping track of where I've applied, who has responded, who ghosted me, etc...
 
 
