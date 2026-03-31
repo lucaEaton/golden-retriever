@@ -64,6 +64,7 @@ void gmail_scanner::scan(const std::string& date, const bool debug) {
     if (!isValidDate(date)) {std::cerr << "invalid date format, expected YYYY/MM/DD (e.g. 2025/01/01)" << std::endl; return;}
     std::string access_token = Session::get().access_token;
     if (access_token.empty()) {std::cerr << "curr access token needs to be refreshed" << std::endl; return;}
+    // TODO: Theses subject statements only pull "Applied" emails, not necessarily "Rejection" or "Offer" emails.
     std::string q =
         "subject:\"thanks for applying\" OR "
         "subject:\"thank you for applying\" OR "
@@ -166,12 +167,16 @@ void gmail_scanner::fetch(const std::string& date, const bool debug) {
         {"unfortunately","Rejected"},
         {"not moving forward","Rejected"},
         {"not to move forward","Rejected"},
-        {"other candidates","Rejected"},
+        {"decided to move forward with other candidates","Rejected"},
+        {"chosen to move forward with other candidates","Rejected"},
+        {"selected other candidates","Rejected"},
         {"another candidate","Rejected"},
         {"position has been filled","Rejected"},
         {"decided to pursue","Rejected"},
         {"not to proceed","Rejected"},
-        {"not selected","Rejected"},
+        {"we will not be moving forward","Rejected"},
+        {"you have not been selected","Rejected"},
+        {"not been selected for","Rejected"},
         {"not be moving","Rejected"},
         {"no longer","Rejected"},
         {"regret to inform","Rejected"},
@@ -216,7 +221,7 @@ void gmail_scanner::fetch(const std::string& date, const bool debug) {
         {"move forward with you","Interview"},
         {"speak with you","Interview"},
 
-        // In Review
+        // review
         {"under review","In Review"},
         {"being reviewed","In Review"},
         {"reviewing your application","In Review"},
@@ -228,6 +233,7 @@ void gmail_scanner::fetch(const std::string& date, const bool debug) {
     for (auto& email : metadata_emails_) {
         std::string company, from, date_applied, status;
         std::string thread_id = email.value("threadId", "");
+        thread_id = std::to_string(std::stoull(thread_id, nullptr, 16));
         auto& payload = email["payload"];
         for (auto& header : payload["headers"]) {
             std::string name  = header.value("name", "");
@@ -323,6 +329,7 @@ void gmail_scanner::fetch(const std::string& date, const bool debug) {
         if (debug) std::cout << "company: '" << company << "' date: '" << date_applied << "' status: '" << status << "' Thread ID: "<< thread_id << std::endl;
         emails_.emplace_back(company, "", date_applied, status);
     }
+     if (debug) std::cout << "total emails: " << emails_.size() << std::endl;
 }
 
 std::vector<gmail_scanner::EmailMetadata> gmail_scanner::getEmailData() {
