@@ -20,8 +20,8 @@ class gmail_scanner {
                 : company(std::move(company)), role(std::move(role)),
                   date_applied(std::move(date)), status(std::move(status)) {}
         };
-        void scan(const std::string &date);
-        void fetch(const std::string &date);
+        void scan(const std::string &date, bool debug = false);
+        void fetch(const std::string &date, bool debug = false);
         std::vector<EmailMetadata> getEmailData();
     private:
         std::vector<nlohmann::json> metadata_emails_;
