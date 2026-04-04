@@ -1,3 +1,6 @@
 [submodule "turbo-b64"]
 	path = turbo-b64
 	url = https://github.com/powturbo/Turbo-Base64.git
+[submodule "email_status_classifier"]
+	path = email_status_classifier
+	url = https://github.com/lucaEaton/email_status_classifier.git
