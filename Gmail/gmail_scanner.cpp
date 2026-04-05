@@ -226,6 +226,7 @@ void gmail_scanner::fetch(const std::string& date, const bool debug) {
             }
         }
 
+
         if ((company.empty() || company.find("Intern") != std::string::npos || company.find("Engineer") != std::string::npos) ){
             if (auto it = from.find('@'); it != std::string::npos) {
                 auto period = from.find('.', it);
