@@ -168,8 +168,17 @@ void auth::refresh() {
     Session::get().refresh_token = newTokens["refresh_token"];
     Session::get().expires_at = newTokens["expires_at"];
     std::string tokenPath = std::string(getenv("HOME")) + "/.config/golden-retriever/config.json";
+
+    json existing;
+    if (std::ifstream inFile(tokenPath); inFile.is_open()) {
+        inFile >> existing;
+        inFile.close();
+    }
+    existing["access_token"]  = newTokens["access_token"];
+    existing["refresh_token"] = tR;
+    existing["expires_at"]    = newTokens["expires_at"];
     std::ofstream outFile(tokenPath);
-    outFile << newTokens.dump(4);
+    outFile << existing.dump(4);
     outFile.close();
     std::cout <<"session refreshed" << std::endl;
 }
@@ -181,7 +190,7 @@ void auth::loadSession() {
     if (fd == -1) {std::cerr << "Having trouble accessing file, may be deleted. Try running the authentication method again " << p << std::endl; return;}
     struct stat sb{};
     fstat(fd, &sb);
-    auto addr = mmap(nullptr, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    const auto addr = mmap(nullptr, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
     if (addr == MAP_FAILED) {std::cerr << "mmap failed " << std::endl; return;}
 
